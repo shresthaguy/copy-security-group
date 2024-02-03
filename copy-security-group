@@ -1,0 +1,63 @@
+#!/bin/bash
+
+### Importing Ingress from Source SG ###
+
+tmpfile1=$(mktemp)
+read -p "Enter Source Region: " source_region
+read -p "Enter Source SG_ID: " source_sg_id
+
+aws ec2 --region=$source_region describe-security-groups --group-ids $source_sg_id | jq -c '.SecurityGroups[] | .IpPermissions' > $tmpfile1
+
+### If using multiple accounts, define profiles with different credentials ###
+#
+# read -p "Enter Source Account Profile: " source_profile
+# aws ec2 --profile $source_profile --region=$source_region describe-security-groups --group-ids $source_sg_id | jq -c '.SecurityGroups[] | .IpPermissions' > $tmpfile1
+#
+  
+### Importing Egress from Source SG ###
+
+tmpfile2=$(mktemp)
+aws ec2 --region=$source_region describe-security-groups --group-ids $source_sg_id | jq -c '.SecurityGroups[] | .IpPermissionsEgress' > $tmpfile2
+
+### Creating Destination SG in Destination Region and grabbing SG id###
+#
+### read -p "Enter Destination Account Profile: " dest_profile
+#
+  
+read -p "Enter Destination Region: " dest_region
+read -p "Enter Destination VPC_ID: " dest_vpc_id
+read -p "Enter Destination SG_Name: " dest_sg_name
+dest_sg_id=$(aws ec2 create-security-group --region $dest_region --group-name $dest_sg_name --description $dest_sg_name --vpc-id $dest_vpc_id --output json | jq -r '.GroupId')
+
+#
+### dest_sg_id=$(aws ec2 --profile $dest_profile create-security-group --region $dest_region --group-name $dest_sg_name --description $dest_sg_name --vpc-id $dest_vpc_id --output json | jq -r '.GroupId')
+#
+  
+echo "Security Group $dest_sg_id created in VPC $dest_vpc_id of Region $dest_region"
+
+### Revoke default outbound rule ( all = 0.0.0.0/0) in destination SG to prevent conflict in rules when copying from source###
+
+aws ec2 --region=$dest_region revoke-security-group-egress --group-id $dest_sg_id --protocol all --port all --cidr 0.0.0.0/0
+
+#
+### For different destination account. Only works if different profile created with destination account credentials. ###
+### aws ec2 --profile $dest_profile --region=$dest_region revoke-security-group-egress --group-id $dest_sg_id --protocol all --port all --cidr 0.0.0.0/0
+#
+  
+### Copying Ingress to Destination SG ###
+
+aws ec2 --region=$dest_region authorize-security-group-ingress --group-id $dest_sg_id --ip-permissions file://$tmpfile1
+
+#
+### For different destination accounti.  Only works if different profile created with destination account credentials. ###
+### aws ec2 --profile $dest_profile --region=$dest_region authorize-security-group-ingress --group-id $dest_sg_id --ip-permissions file://$tmpfile1
+#
+
+### Copying Egress to Destination SG ###
+
+aws ec2 --region=$dest_region authorize-security-group-egress --group-id $dest_sg_id --ip-permissions file://$tmpfile2
+
+#
+### For different destination account.  Only works if different profile created with destination account credentials.###
+### aws ec2 --profile $dest_profile --region=$dest_region authorize-security-group-egress --group-id $dest_sg_id --ip-permissions file://$tmpfile2
+#
